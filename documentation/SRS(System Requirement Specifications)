@@ -1,0 +1,147 @@
+# Software Requirements Specification (SRS)
+## FinSight — SME Financial Intelligence and Management Platform
+
+**Document Version:** 1.0  
+**Status:** Baseline Draft  
+**Project Category:** Financial Technology (FinTech)  
+**Target Market:** Small and Medium-Sized Enterprises (SMEs) — Initial Market: South Africa  
+**Architecture Style:** Modular Monolith  
+
+---
+
+## 1. Introduction
+
+### 1.1 Purpose
+  
+This Software Requirements Specification (SRS) defines the functional requirements, non-functional requirements, business rules, data integrity constraints, security safeguards, and acceptance criteria for **FinSight**[cite: 1, 20, 23, 35]. It serves as the engineering baseline for design, implementation, testing, and portfolio evaluation[cite: 28, 32, 35].
+
+### 1.2 Scope
+  
+FinSight is a centralized full-stack financial recordkeeping, intelligent payment reconciliation, and cash-flow intelligence platform for SMEs[cite: 1, 2]. It connects the core financial workflow:  
+`Customers → Invoices → Payments → Transactions → Financial Analytics → Business Insights`[cite: 3].
+
+**Scope Boundary (Intermediary & Regulatory Positioning):**  
+  
+FinSight operates strictly as a **financial recordkeeping and intelligence intermediary**, not as a licensed payment processor, deposit-taking institution, or registered tax/accounting practitioner[cite: 24]. Payment gateway interactions (e.g., Paystack, Peach Payments) and banking data feeds are decoupled from core ledger recordkeeping[cite: 24].
+
+### 1.3 Definitions & Abbreviations
+  
+- **SME:** Small and Medium-Sized Enterprise[cite: 1, 2].
+- **RBAC:** Role-Based Access Control[cite: 5].
+- **POPIA:** Protection of Personal Information Act (South Africa)[cite: 24].
+- **SARS:** South African Revenue Service[cite: 24].
+- **HITL:** Human-in-the-Loop verification required prior to committing ambiguous financial matches[cite: 12].
+
+---
+
+## 2. User Roles & Permissions (RBAC)
+
+FinSight enforces strict tenant isolation and Role-Based Access Control across multiple businesses[cite: 5, 6, 23]. One user account may belong to multiple businesses with distinct roles per business (e.g., an external accountant managing five SMEs)[cite: 6].
+
+| Role | Description | Permitted Operations | Restricted Operations |
+| :--- | :--- | :--- | :--- |
+| **Business Owner (`OWNER`)** | Primary business principal[cite: 4]. | Full access to dashboard, revenue/expense analytics, invoicing, payments, reconciliation, reports, business settings, and team role management[cite: 4, 5, 6]. | Cannot access other tenants' data[cite: 23]. |
+| **Accountant / Financial Admin (`ACCOUNTANT`)** | Internal or external financial practitioner[cite: 5]. | Review transactions, execute/confirm payment reconciliations, categorize expenses, generate/export financial reports, view audit histories[cite: 5, 16]. | Cannot delete the business entity or alter Owner ownership without explicit transfer. |
+| **Employee / Staff (`STAFF`)** | Operational team member[cite: 5]. | Create/manage customers and draft/issue invoices (based on assigned scope)[cite: 5]. | Restricted from sensitive company-wide financial reports, cash-flow forecasts, audit logs, and business admin settings[cite: 5]. |
+
+---
+
+## 3. Core Business Rules (SME & Fintech Intermediary Standards)
+
+### 3.1 Onboarding & Tenant Governance Rules
+  
+- **BR-ONB-01 (Verified Identity):** A user must register with a unique email address and complete email verification before creating or joining a business profile[cite: 6].
+- **BR-ONB-02 (Business Profile Completeness):** A business tenant must configure a valid Business Name, Business Type, Location, and Base Currency (default `ZAR`) before issuing invoices or recording transactions[cite: 6].
+- **BR-ONB-03 (Multi-Business Membership):** The data model must support a many-to-many relationship between `users` and `businesses` via `business_members`, scoping every session and API request to an active `business_id`[cite: 6, 19, 23].
+- **BR-ONB-04 (Regulatory & Advisory Disclaimer):** During onboarding, business owners must acknowledge POPIA data-processing terms and confirm that FinSight is a financial management/recordkeeping tool rather than a replacement for professional tax or accounting advice[cite: 24].
+
+### 3.2 Financial Accounting & Recordkeeping Rules
+  
+- **BR-FIN-01 (Separation of Accrual/Invoicing vs. Cash Movement):** Issuing an invoice records an accounts-receivable obligation (money owed by a customer); it **never** increases recorded cash received until an actual payment transaction is settled[cite: 10, 13].
+- **BR-FIN-02 (Exact Fixed-Point Monetary Arithmetic):** Floating-point types (`float`, `double`) are strictly prohibited for monetary amounts, tax rates, or balances[cite: 20]. All monetary values must use exact decimal representations (`BigDecimal` in Java Spring Boot; `NUMERIC(19, 4)` or `NUMERIC(19, 2)` in PostgreSQL)[cite: 20].
+- **BR-FIN-03 (Atomic Financial State Transitions):** Recording a payment against an invoice must execute inside a single ACID database transaction that atomically: (1) inserts the payment record, (2) creates the incoming transaction record, (3) recalculates the invoice's paid and remaining balance, (4) updates the invoice status, and (5) writes an immutable audit log entry[cite: 20].
+- **BR-FIN-04 (Non-Destructive Auditability & SARS Retention):** Financial records (issued invoices, confirmed payments, transactions) must never be silently overwritten or hard-deleted[cite: 21]. Cancellations or reversals must preserve traceable audit histories and supporting documents (invoices, receipts, bank statement imports) in alignment with SARS recordkeeping expectations[cite: 21, 24].
+- **BR-FIN-05 (Strict Invoice State Machine):** Invoices follow deterministic lifecycle states: `DRAFT`, `ISSUED`, `PARTIALLY_PAID`, `PAID`, `OVERDUE`, and `CANCELLED`[cite: 8].
+  - Payments cannot be applied to `DRAFT`, `PAID`, or `CANCELLED` invoices[cite: 8, 28].
+  - Invoice numbers must be unique within each business (e.g., `INV-0001`)[cite: 8, 21].
+  - Payment amounts must be strictly positive (`> 0`)[cite: 21].
+
+### 3.3 Intermediary & Payment Reconciliation Rules
+    
+- **BR-INT-01 (Decoupled Payment Processing):** FinSight must never collect or store raw customer bank login credentials or payment card numbers[cite: 24, 25]. External payment gateways (Paystack, Peach Payments) operate via tokenized/webhook sandbox events[cite: 24, 25].
+- **BR-INT-02 (Human-in-the-Loop Reconciliation):** The automated reconciliation engine generates confidence-scored match proposals, but **must never automatically mark an invoice as `PAID`** without explicit confirmation from an authorized user (`OWNER` or `ACCOUNTANT`)[cite: 5, 12].
+- **BR-INT-03 (Idempotent Statement Imports):** Re-importing the same bank statement CSV or duplicate transaction row must be detected and prevented from creating duplicate ledger entries[cite: 25, 28].
+
+---
+
+## 4. Functional Requirements & Acceptance Criteria
+
+### 4.1 Module 1: Authentication & User Management
+  
+- **REQ-AUTH-01:** Users can register, verify email, log in, log out, refresh tokens, and reset passwords securely[cite: 6, 21, 23].
+- **REQ-AUTH-02:** Authenticated users can create a business profile and invite additional users to that business with assigned roles (`OWNER`, `ACCOUNTANT`, `STAFF`)[cite: 5, 6].
+- **Acceptance Criteria:**
+  - Unauthenticated requests to protected `/api/v1/**` endpoints return `401 Unauthorized`[cite: 21, 23].
+  - Users attempting to access resources belonging to a `business_id` they are not a member of receive `403 Forbidden`[cite: 23].
+  - Passwords are stored exclusively using strong adaptive hashing (e.g., BCrypt)[cite: 23].
+
+### 4.2 Module 2: Customer Management
+  
+- **REQ-CUST-01:** Authorized users can create, view, update, and soft-archive customer records (name, email, phone, billing details) scoped to their business[cite: 6, 7, 21].
+- **REQ-CUST-02:** The system displays each customer's complete invoice history, payment history, total outstanding balance, and downloadable customer statement[cite: 7].
+- **Acceptance Criteria:**
+  - Every customer record is bound to a valid `business_id`[cite: 21].
+  - A customer's outstanding balance dynamically equals the sum of unpaid balances across all their `ISSUED`, `PARTIALLY_PAID`, and `OVERDUE` invoices[cite: 7, 8].
+
+### 4.3 Module 3: Invoice Management
+  
+- **REQ-INV-01:** Authorized users can create draft invoices with multiple line items (description, quantity, unit price), payment due dates, and auto-generated business-scoped invoice numbers[cite: 7, 8, 21].
+- **REQ-INV-02:** Users can transition invoices from `DRAFT` to `ISSUED`, cancel eligible invoices (`CANCELLED`), and export formatted PDF invoices[cite: 7, 8].
+- **REQ-INV-03:** The system automatically flags `ISSUED` or `PARTIALLY_PAID` invoices past their due date as `OVERDUE`[cite: 8].
+  
+- **Edge Cases Handled:**
+  
+  - Reject invoices with empty line items, zero/negative quantities, or negative unit prices[cite: 21, 23].
+  - Prevent editing line-item amounts once an invoice has received partial payments.
+  - Prevent cancelling an invoice that already has confirmed payments without reversing/accounting for those payments.
+    
+- **Acceptance Criteria:**
+    
+  - Line-item totals and invoice subtotals match exact `BigDecimal` arithmetic[cite: 20].
+  - PDF export renders business details, customer details, invoice number, itemized lines, due date, and payment instructions[cite: 7].
+
+### 4.4 Module 4: Transaction & Expense Management
+  
+- **REQ-TXN-01:** Users can record incoming transactions (customer payments, other income) and outgoing expenses (rent, electricity, salaries/expenses, transport, equipment, software subscriptions) with date, amount, category, description, and payment reference[cite: 9].
+- **REQ-TXN-02:** Every transaction is assigned a unique `Transaction ID`, `Business ID`, `Transaction Type` (`INCOMING` / `OUTGOING`), and `Transaction Status`[cite: 9, 10].
+- **Acceptance Criteria:**
+  - Creating an invoice does not create an incoming cash transaction[cite: 10].
+  - Recording an expense immediately updates period expenditure totals while leaving invoiced revenue untouched[cite: 10, 13].
+
+### 4.5 Module 5: Intelligent Payment Reconciliation (Core Differentiator)
+  
+- **REQ-REC-01:** Users can upload bank statement CSV files for a selected business[cite: 10].
+- **REQ-REC-02:** The parser validates headers, formats, dates, and monetary amounts, normalizing noisy payment references (e.g., `INV001`, `Invoice001`, `INV-001`, `INV 001` → normalized token `INV001`)[cite: 10, 11].
+- **REQ-REC-03:** The matching engine scores candidate pairs between unallocated incoming bank transactions and open invoices using a weighted scoring model[cite: 10, 11, 12]:
+  - **Normalized Payment Reference Similarity:** `50%` weight[cite: 12]
+  - **Monetary Amount Match (exact or partial):** `30%` weight[cite: 12]
+  - **Date Proximity (transaction date vs. issue/due date):** `10%` weight[cite: 12]
+  - **Customer Name / Identifier Match:** `10%` weight[cite: 12]
+- **REQ-REC-04:** Users review proposed matches (with confidence scores) and explicitly **Confirm** or **Reject** each match, after which the system generates a downloadable Reconciliation Report[cite: 10, 11, 12].
+  
+- **Edge Cases Handled:**
+  
+  - Partial payments (`R2,000` received against a `R5,000` invoice → updates balance to `R3,000` and status to `PARTIALLY_PAID`)[cite: 8, 28].
+  - Overpayments (payment exceeds remaining invoice balance → flagged for user review rather than creating a negative balance)[cite: 28].
+  - Multiple open invoices with identical amounts and missing references (presented as ambiguous candidates requiring human selection)[cite: 12, 28].
+  - Corrupted or malformed CSV rows (rejected cleanly with row-level validation feedback and zero partial writes)[cite: 10, 20].
+  
+- **Acceptance Criteria:**
+  
+  - Confirming a match atomically creates the `Payment` and `Transaction`, updates the `Invoice` balance/status, marks the `ReconciliationMatch` as `CONFIRMED`, and logs an audit entry[cite: 10, 20, 24].
+  - Rejecting a match leaves the invoice balance unchanged and marks the transaction unmatched[cite: 10].
+
+### 4.6 Module 6: Financial Analytics Dashboard
+  
+- **REQ-ANA-01:** Display real-time period indicators clearly separating accrual metrics from cash metrics[cite: 13]:
+  - **Total Invoiced Revenue** (value of issued invoices in period)[cite: 13]
